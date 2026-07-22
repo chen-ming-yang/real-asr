@@ -1,0 +1,54 @@
+# Zipformer-Large + Stateless Transducer 模型配置
+
+model:
+  encoder:
+    type: zipformer
+    variant: large
+    num_stages: 6
+    hidden_dims: [192, 256, 384, 512, 384, 256]
+    num_heads: [4, 4, 8, 8, 8, 4]
+    num_encoder_layers: [2, 2, 4, 5, 4, 2]
+    downsampling_factors: [1, 2, 4, 8, 4, 2]  # U-Net multi-scale
+    feedforward_dims: [512, 768, 1536, 2048, 1536, 768]
+    cnn_module_kernels: [31, 31, 31, 31, 31, 31]
+    dropout: 0.1
+    # Streaming config
+    chunk_size: 32  # 320ms at 10ms shift
+    left_context_frames: 64
+    right_context_frames: 8  # 少量右上下文提升精度
+
+  predictor:
+    type: stateless
+    embedding_dim: 512
+    context_size: 2  # 2-gram history
+    conv_layers: 2
+    conv_kernel_size: 3
+
+  joiner:
+    type: linear
+    input_dim: 512  # encoder_output_dim + predictor_output_dim -> joiner_dim
+    hidden_dim: 512
+    output_dim: 6000  # vocab size
+
+  ctc_head:
+    enabled: true
+    output_dim: 6000
+
+  # Encoder output projection (for KD alignment)
+  encoder_output_dim: 512
+  teacher_hidden_dim: 1024  # Qwen3-ASR AuT encoder dim
+
+tokenizer:
+  type: sentencepiece
+  model_type: unigram
+  vocab_size: 6000
+  character_coverage: 0.9999
+  input_sentence_size: 5000000
+
+audio:
+  sample_rate: 16000
+  feature_type: fbank
+  num_mel_bins: 80
+  frame_length_ms: 25
+  frame_shift_ms: 10
+  dither: 0.1

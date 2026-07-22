@@ -1,0 +1,60 @@
+# Stage 1: 通用中文预训练 (WenetSpeech pseudo-label)
+
+inherit: model.yaml
+
+data:
+  train_set: wenetspeech_pseudo_labeled
+  manifest_dir: data/manifests/wenetspeech
+  max_duration: 30.0  # seconds per cut
+  min_duration: 0.5
+  num_workers: 8
+  bucketing_sampler:
+    max_duration_per_batch: 600  # seconds
+    shuffle: true
+    drop_last: true
+
+training:
+  stage: pretrain
+  num_epochs: 25
+  seed: 42
+
+  optimizer:
+    type: ScaledAdam
+    lr: 0.045
+    betas: [0.9, 0.98]
+    weight_decay: 1.0e-6
+    clipping_scale: 2.0
+
+  scheduler:
+    type: eden
+    warmup_steps: 5000
+    lr_batches: 5000
+
+  loss:
+    rnnt_weight: 1.0
+    ctc_weight: 0.3
+    pruned_rnnt:
+      simple_loss_scale: 0.5
+      lm_scale: 0.25
+      am_scale: 0.0
+
+  augmentation:
+    spec_augment:
+      freq_mask_count: 2
+      freq_mask_width: 27
+      time_mask_count: 10
+      time_mask_width: 50  # frames
+    speed_perturb:
+      factors: [0.9, 1.0, 1.1]
+    musan:
+      noise_dir: data/musan
+      prob: 0.5
+
+  checkpoint:
+    save_every_n_epochs: 1
+    keep_last_n: 5
+    exp_dir: exp/stage1_pretrain
+
+  distributed:
+    world_size: 4  # 4 GPUs
+    backend: nccl

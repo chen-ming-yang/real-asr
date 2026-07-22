@@ -1,0 +1,91 @@
+# Stage 2: 构音障碍知识蒸馏
+
+inherit: model.yaml
+
+data:
+  train_set: dysarthric_mixed  # 标注 + pseudo-label
+  manifest_dir: data/manifests/dysarthric
+  max_duration: 30.0
+  min_duration: 0.3  # 构音障碍可能有很短的片段
+  num_workers: 8
+  bucketing_sampler:
+    max_duration_per_batch: 400  # 蒸馏需更多显存，batch 稍小
+    shuffle: true
+    drop_last: true
+
+teacher:
+  model_path: /path/to/finetuned_qwen3_asr  # 你微调后的 Qwen3-ASR checkpoint
+  device: cuda:0
+  dtype: bfloat16
+  # 只加载 AuT encoder 部分用于 feature KD
+  extract_layer: aut_encoder_output  # projector 之前的 encoder 输出
+  # 用 vLLM 做 teacher decode 获取 token probabilities
+  vllm_config:
+    tensor_parallel_size: 1
+    max_model_len: 4096
+    gpu_memory_utilization: 0.4
+
+training:
+  stage: distill
+  num_epochs: 40
+  seed: 42
+  resume_from: exp/stage1_pretrain/best.pt  # 从 Stage 1 继续
+
+  optimizer:
+    type: ScaledAdam
+    lr: 0.01  # 比预训练低
+    betas: [0.9, 0.98]
+    weight_decay: 1.0e-6
+    clipping_scale: 2.0
+
+  scheduler:
+    type: eden
+    warmup_steps: 2000
+    lr_batches: 2000
+
+  loss:
+    rnnt_weight: 1.0
+    ctc_weight: 0.3
+    # Feature-level KD
+    feature_kd_weight: 0.5
+    feature_kd_type: mse  # or cosine
+    # Output-level KD
+    output_kd_weight: 0.3
+    output_kd_type: kl_divergence
+    temperature: 2.0
+    # Delayed-KD for streaming alignment
+    temporal_alignment_buffer:
+      enabled: true
+      max_delay_chunks: 4
+
+  augmentation:
+    spec_augment:
+      freq_mask_count: 2
+      freq_mask_width: 27
+      time_mask_count: 10
+      time_mask_width: 80  # 比 Stage 1 更激进
+    speed_perturb:
+      factors: [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3]  # 构音障碍语速变化大
+    pitch_perturb:
+      range_semitones: [-3, 3]
+      prob: 0.3
+    formant_perturb:
+      shift_ratio: 0.1
+      prob: 0.3
+
+  # 按 severity 分层采样
+  severity_sampler:
+    enabled: true
+    weights:
+      mild: 0.3
+      moderate: 0.4
+      severe: 0.3
+
+  checkpoint:
+    save_every_n_epochs: 1
+    keep_last_n: 5
+    exp_dir: exp/stage2_distill
+
+  distributed:
+    world_size: 4
+    backend: nccl
