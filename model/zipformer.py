@@ -227,32 +227,48 @@ class ZipformerEncoder(nn.Module):
                 )
             )
 
-        # Downsampling between stages (encoder side of U-Net)
-        # Stage transitions for U-Net path
-        half = self.num_stages // 2
-        for i in range(half - 1):
-            factor = self.downsampling_factors[i + 1] // max(self.downsampling_factors[i], 1)
-            if factor > 1:
+        # Downsampling between stages using Conv1d stride
+        # stages: 0(1x) -> 1(2x) -> 2(4x) -> 3(8x bottleneck)
+        half = self.num_stages // 2  # 3
+        for i in range(half):
+            next_dim = self.hidden_dims[i + 1]
+            curr_dim = self.hidden_dims[i]
+            # Compute factor between consecutive stages
+            curr_factor = self.downsampling_factors[i]
+            next_factor = self.downsampling_factors[i + 1]
+            stride = next_factor // curr_factor
+            if stride > 1:
                 self.downsamplers.append(
-                    DownsampleLayer(self.hidden_dims[i], self.hidden_dims[i + 1], factor)
+                    DownsampleLayer(curr_dim, next_dim, stride)
                 )
             else:
                 self.downsamplers.append(
-                    nn.Linear(self.hidden_dims[i], self.hidden_dims[i + 1])
+                    nn.Sequential(
+                        nn.Linear(curr_dim, next_dim),
+                        nn.LayerNorm(next_dim),
+                    )
                 )
 
         # Upsampling for decoder side of U-Net
+        # stages: 3(8x) -> 4(4x) -> 5(2x)
         for i in range(half - 1):
-            src_idx = half + i
-            tgt_idx = half + i + 1
-            factor = self.downsampling_factors[src_idx] // max(self.downsampling_factors[tgt_idx], 1)
-            if factor > 1:
+            src_stage = half + i      # 3, 4
+            tgt_stage = half + i + 1  # 4, 5
+            src_dim = self.hidden_dims[src_stage]
+            tgt_dim = self.hidden_dims[tgt_stage]
+            src_factor = self.downsampling_factors[src_stage]
+            tgt_factor = self.downsampling_factors[tgt_stage]
+            stride = src_factor // tgt_factor
+            if stride > 1:
                 self.upsamplers.append(
-                    UpsampleLayer(self.hidden_dims[src_idx], self.hidden_dims[tgt_idx], factor)
+                    UpsampleLayer(src_dim, tgt_dim, stride)
                 )
             else:
                 self.upsamplers.append(
-                    nn.Linear(self.hidden_dims[src_idx], self.hidden_dims[tgt_idx])
+                    nn.Sequential(
+                        nn.Linear(src_dim, tgt_dim),
+                        nn.LayerNorm(tgt_dim),
+                    )
                 )
 
         # Output projection
@@ -281,7 +297,7 @@ class ZipformerEncoder(nn.Module):
             streaming: if True, apply chunk mask
 
         Returns:
-            output: (batch, time', output_dim)
+            output: (batch, time', output_dim) where time' = time // 4
             output_lens: (batch,)
         """
         x = self.input_proj(x)
@@ -291,37 +307,60 @@ class ZipformerEncoder(nn.Module):
         if streaming:
             attn_mask = self._create_chunk_mask(x.size(1), x.device)
 
-        # U-Net forward pass (simplified)
-        half = self.num_stages // 2
+        half = self.num_stages // 2  # 3
         intermediates: List[Tuple[torch.Tensor, int]] = []
 
-        # Encoder path (downsample)
+        # Encoder path (stages 0,1,2 with downsampling between)
         for i in range(half):
             x = self.stages[i](x, attn_mask=attn_mask)
-            if i < half - 1:
-                intermediates.append((x, x.size(1)))
+            intermediates.append((x, x.size(1)))
+            if i < len(self.downsamplers):
                 x = self.downsamplers[i](x)
                 if streaming:
                     attn_mask = self._create_chunk_mask(x.size(1), x.device)
 
-        # Bottleneck
-        x = self.stages[half](x, attn_mask=attn_mask) if half < self.num_stages else x
+        # Bottleneck (stage 3)
+        x = self.stages[half](x, attn_mask=attn_mask)
 
-        # Decoder path (upsample)
-        for i in range(half, self.num_stages):
-            if i > half and (i - half - 1) < len(self.upsamplers):
-                target_len = intermediates[-(i - half)][1] if intermediates else x.size(1)
-                x = self.upsamplers[i - half - 1](x, target_len)
-                if streaming:
-                    attn_mask = self._create_chunk_mask(x.size(1), x.device)
-            if i < self.num_stages:
-                x = self.stages[i](x, attn_mask=attn_mask)
+        # Decoder path (stages 4,5 with upsampling)
+        for i in range(len(self.upsamplers)):
+            stage_idx = half + 1 + i  # 4, 5
+            # Skip connection: stage 4 connects to stage 2, stage 5 to stage 1
+            skip_idx = half - 1 - i   # 2, 1
+
+            if isinstance(self.upsamplers[i], UpsampleLayer):
+                skip_len = intermediates[skip_idx][1]
+                x = self.upsamplers[i](x, skip_len)
+            else:
+                x = self.upsamplers[i](x)
+
+            # Skip connection (add)
+            skip_x = intermediates[skip_idx][0]
+            if x.size(1) != skip_x.size(1):
+                min_len = min(x.size(1), skip_x.size(1))
+                x = x[:, :min_len, :]
+                skip_x = skip_x[:, :min_len, :]
+            x = x + skip_x
+
+            if streaming:
+                attn_mask = self._create_chunk_mask(x.size(1), x.device)
+            x = self.stages[stage_idx](x, attn_mask=attn_mask)
 
         x = self.output_proj(x)
         x = self.output_norm(x)
 
-        # Compute output lengths
-        output_lens = x_lens  # same as input after padding handling
+        # Final output is at 2x downsample (stage 5). Apply additional 2x
+        # downsample to get 4x total (40ms/frame, standard for ASR).
+        # Use simple mean-pooling for the final 2x reduction.
+        B, T_out, D = x.shape
+        if T_out % 2 == 1:
+            x = F.pad(x, (0, 0, 0, 1))  # pad time dim
+            T_out += 1
+        x = x.view(B, T_out // 2, 2, D).mean(dim=2)  # (B, T/2, D)
+
+        # Compute actual output lengths based on real tensor size
+        # Each input frame goes through: 2x (U-Net) * 2x (pool) = 4x total
+        output_lens = torch.clamp(x_lens // 4, max=x.size(1))
 
         return x, output_lens
 

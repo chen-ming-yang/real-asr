@@ -1,0 +1,55 @@
+# RNN-T 在 WenetSpeech-L 上继续训练（在线特征提取）
+# 基于 epoch_30 checkpoint 继续微调
+
+model:
+  encoder:
+    type: icefall_zipformer2
+    encoder_dim: [384, 512]
+    downsampling_factor: [2, 4]
+    num_encoder_layers: [4, 4]
+    num_heads: [8, 8]
+    feedforward_dim: [1536, 2048]
+    cnn_module_kernel: [31, 31]
+    query_head_dim: [24, 24]
+    pos_head_dim: [4, 4]
+    value_head_dim: [12, 12]
+    encoder_unmasked_dim: [256, 256]
+    pos_dim: 192
+    output_downsampling_factor: 2
+    warmup_batches: 4000.0
+    dropout: 0.075
+    causal: false
+
+  encoder_output_dim: 512
+  vocab_size: 6000
+  predictor_dim: 512
+  joiner_dim: 512
+  context_size: 2
+
+audio:
+  sample_rate: 16000
+  num_mel_bins: 80
+
+data:
+  manifest_dir: data/manifests/wenetspeech/train
+  tokenizer_path: data/tokenizer/sp_6000.model
+  max_duration_per_batch: 400
+  max_duration: 20.0
+  min_duration: 0.5
+  num_workers: 4
+
+loss:
+  rnnt_weight: 1.0
+  ctc_weight: 0.3
+  prune_range: 5
+  simple_loss_scale: 0.5
+
+training:
+  num_epochs: 40
+  lr: 0.0002
+  warmup_steps: 3000
+  grad_accum_steps: 8
+  seed: 42
+  exp_dir: exp/rnnt_joint_L
+  keep_last_n: 5
+  resume_from: exp/rnnt_joint/epoch_30.pt

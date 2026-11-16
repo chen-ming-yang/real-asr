@@ -60,7 +60,11 @@ class StatelessPredictor(nn.Module):
 
 
 class Joiner(nn.Module):
-    """Simple joiner that combines encoder and predictor outputs."""
+    """Joiner that combines encoder and predictor outputs.
+
+    Uses LayerNorm before activation to prevent saturation,
+    and ReLU instead of tanh for better gradient flow.
+    """
 
     def __init__(
         self,
@@ -72,32 +76,44 @@ class Joiner(nn.Module):
         super().__init__()
         self.encoder_proj = nn.Linear(encoder_dim, hidden_dim)
         self.predictor_proj = nn.Linear(predictor_dim, hidden_dim)
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.activation = nn.ReLU()
         self.output_proj = nn.Linear(hidden_dim, output_dim)
+        self.simple_lm_proj = nn.Linear(predictor_dim, output_dim)
+        self.simple_am_proj = nn.Linear(encoder_dim, output_dim)
 
     def forward(
         self,
         encoder_out: torch.Tensor,
         predictor_out: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Args:
-            encoder_out: (batch, T, encoder_dim) or (batch, T, 1, encoder_dim)
-            predictor_out: (batch, U, predictor_dim) or (batch, 1, U, predictor_dim)
-
-        Returns:
-            logits: (batch, T, U, vocab_size)
-        """
+        """Full lattice forward: (B,T,D) x (B,U,D) -> (B,T,U,V)"""
         enc = self.encoder_proj(encoder_out)
         pred = self.predictor_proj(predictor_out)
 
-        # Broadcast for RNN-T lattice
         if enc.dim() == 3:
-            enc = enc.unsqueeze(2)  # (B, T, 1, H)
+            enc = enc.unsqueeze(2)
         if pred.dim() == 3:
-            pred = pred.unsqueeze(1)  # (B, 1, U, H)
+            pred = pred.unsqueeze(1)
 
-        logits = torch.tanh(enc + pred)
-        logits = self.output_proj(logits)
+        combined = enc + pred
+        combined = self.norm(combined)
+        combined = self.activation(combined)
+        logits = self.output_proj(combined)
+        return logits
+
+    def forward_pruned(
+        self,
+        am_pruned: torch.Tensor,
+        lm_pruned: torch.Tensor,
+    ) -> torch.Tensor:
+        """Pruned forward: (B,T,s_range,D) x (B,T,s_range,D) -> (B,T,s_range,V)"""
+        enc = self.encoder_proj(am_pruned)
+        pred = self.predictor_proj(lm_pruned)
+        combined = enc + pred
+        combined = self.norm(combined)
+        combined = self.activation(combined)
+        logits = self.output_proj(combined)
         return logits
 
 
@@ -139,9 +155,10 @@ class Transducer(nn.Module):
             streaming: whether to use chunk mask
 
         Returns:
-            logits: (batch, T, U, vocab_size) for RNN-T loss
+            encoder_out: (B, T, encoder_dim)
+            encoder_out_lens: (B,)
+            predictor_out: (B, U, predictor_dim)
         """
         encoder_out, encoder_out_lens = self.encoder(x, x_lens, streaming=streaming)
         predictor_out = self.predictor(y)
-        logits = self.joiner(encoder_out, predictor_out)
-        return logits, encoder_out, encoder_out_lens
+        return encoder_out, encoder_out_lens, predictor_out

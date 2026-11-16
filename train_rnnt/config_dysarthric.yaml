@@ -1,0 +1,57 @@
+# RNN-T 构音障碍数据微调
+# 模仿 CTC: configs/train_finetune_dysarthric.yaml
+# 从 AISHELL 最优模型 avg_46_50.pt 继续训练
+
+model:
+  encoder:
+    type: icefall_zipformer2
+    encoder_dim: [384, 512]
+    downsampling_factor: [2, 4]
+    num_encoder_layers: [4, 4]
+    num_heads: [8, 8]
+    feedforward_dim: [1536, 2048]
+    cnn_module_kernel: [31, 31]
+    query_head_dim: [24, 24]
+    pos_head_dim: [4, 4]
+    value_head_dim: [12, 12]
+    encoder_unmasked_dim: [256, 256]
+    pos_dim: 192
+    output_downsampling_factor: 2
+    warmup_batches: 4000.0
+    dropout: 0.1
+    causal: false
+
+  encoder_output_dim: 512
+  vocab_size: 6000
+  predictor_dim: 512
+  joiner_dim: 512
+  context_size: 2
+
+audio:
+  sample_rate: 16000
+  num_mel_bins: 80
+
+data:
+  manifest_dir: data/manifests/dysarthric/train
+  tokenizer_path: data/tokenizer/sp_6000.model
+  max_duration_per_batch: 400
+  max_duration: 30.0
+  min_duration: 0.3
+  num_workers: 2
+
+loss:
+  rnnt_weight: 1.0
+  ctc_weight: 0.3
+  prune_range: 5
+  simple_loss_scale: 0.5
+
+training:
+  num_epochs: 30
+  lr: 0.00003
+  warmup_steps: 1000
+  grad_accum_steps: 4
+  seed: 42
+  exp_dir: exp/rnnt_joint_dysarthric
+  keep_last_n: 5
+  resume_from: exp/rnnt_joint_aishell/avg_46_50.pt
+  reset_epoch: true

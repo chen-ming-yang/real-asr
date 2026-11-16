@@ -1,21 +1,22 @@
-# Zipformer-Large + Stateless Transducer 模型配置
+# Zipformer-M (Standard) + Stateless Transducer 模型配置
+# Matches icefall pkufool/icefall-asr-zipformer-streaming-wenetspeech-20230615
 
 model:
   encoder:
     type: zipformer
-    variant: large
+    variant: medium
     num_stages: 6
     hidden_dims: [192, 256, 384, 512, 384, 256]
-    num_heads: [4, 4, 8, 8, 8, 4]
-    num_encoder_layers: [2, 2, 4, 5, 4, 2]
-    downsampling_factors: [1, 2, 4, 8, 4, 2]  # U-Net multi-scale
-    feedforward_dims: [512, 768, 1536, 2048, 1536, 768]
-    cnn_module_kernels: [31, 31, 31, 31, 31, 31]
+    num_heads: [4, 4, 4, 8, 4, 4]
+    num_encoder_layers: [2, 2, 3, 4, 3, 2]
+    downsampling_factors: [1, 2, 4, 8, 4, 2]
+    feedforward_dims: [512, 768, 1024, 1536, 1024, 768]
+    cnn_module_kernels: [31, 31, 15, 15, 15, 31]
     dropout: 0.1
     # Streaming config
-    chunk_size: 32  # 320ms at 10ms shift
+    chunk_size: 32
     left_context_frames: 64
-    right_context_frames: 8  # 少量右上下文提升精度
+    right_context_frames: 0
 
   predictor:
     type: stateless

@@ -1,0 +1,84 @@
+# RNN-T Stage B: 解冻 Encoder，全模型微调
+# 从 Stage A 最优 checkpoint 加载
+
+inherit: model.yaml
+
+model:
+  encoder:
+    type: icefall_zipformer2
+    encoder_dim: [384, 512]
+    downsampling_factor: [2, 4]
+    num_encoder_layers: [4, 4]
+    num_heads: [8, 8]
+    feedforward_dim: [1536, 2048]
+    cnn_module_kernel: [31, 31]
+    query_head_dim: [24, 24]
+    pos_head_dim: [4, 4]
+    value_head_dim: [12, 12]
+    encoder_unmasked_dim: [256, 256]
+    pos_dim: 192
+    output_downsampling_factor: 2
+    warmup_batches: 4000.0
+    dropout: 0.05
+    causal: false
+
+  encoder_output_dim: 512
+
+data:
+  train_set: wenetspeech_ms
+  manifest_dir: data/manifests/wenetspeech/train_ms
+  tokenizer_path: data/tokenizer/sp_6000.model
+  max_duration: 20.0
+  min_duration: 0.5
+  num_workers: 4
+  bucketing_sampler:
+    max_duration_per_batch: 150  # full model training, moderate batch
+    shuffle: true
+    drop_last: true
+
+training:
+  stage: rnnt_stageB
+  num_epochs: 10
+  seed: 42
+
+  # Full model training — no freeze
+  freeze_encoder: false
+  resume_from: null  # will be set to Stage A best checkpoint
+
+  optimizer:
+    type: AdamW
+    lr: 0.00003
+    betas: [0.9, 0.98]
+    weight_decay: 0.01
+    grad_clip_norm: 1.0
+
+  scheduler:
+    type: cosine
+    warmup_steps: 1000
+    min_lr_ratio: 0.1
+
+  loss:
+    rnnt_weight: 3.0
+    ctc_weight: 0.1
+    prune_range: 5
+    simple_loss_scale: 0.5
+    pruned_rnnt:
+      simple_loss_scale: 0.5
+      lm_scale: 0.25
+      am_scale: 0.0
+
+  augmentation:
+    spec_augment:
+      freq_mask_count: 2
+      freq_mask_width: 27
+      time_mask_count: 10
+      time_mask_width: 50
+
+  checkpoint:
+    save_every_n_epochs: 1
+    keep_last_n: 5
+    exp_dir: exp/rnnt_stageB
+
+  distributed:
+    world_size: 1
+    backend: nccl
