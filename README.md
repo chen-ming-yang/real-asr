@@ -614,4 +614,7 @@ tensorboard --logdir exp/ --port 6007
 
 ## License
 
-Apache 2.0
+This project is released under the **Apache License 2.0**. See [LICENSE](LICENSE).
+
+It includes code from icefall (Xiaomi Corp., Apache-2.0) and is distilled from
+Qwen3-ASR (Apache-2.0). See [NOTICE](NOTICE) for details.

@@ -1,0 +1,20 @@
+real-asr
+Copyright 2026 chen-ming-yang
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It includes or builds upon the following third-party software:
+
+1. icefall — https://github.com/k2-fsa/icefall
+   Copyright 2021-2023 Xiaomi Corp. (authors: Daniel Povey, Fangjun Kuang, et al.)
+   Files: model/icefall_scaling.py, model/icefall_utils.py, model/icefall_zipformer.py
+   Licensed under the Apache License, Version 2.0.
+
+2. Qwen3-ASR — https://github.com/QwenLM/Qwen3-ASR
+   The student model is distilled from a fine-tuned Qwen3-ASR-1.7B teacher.
+   Licensed under the Apache License, Version 2.0.
+
+3. k2 / lhotse — https://github.com/k2-fsa
+   Licensed under the Apache License, Version 2.0.
+
+All third-party components remain under their original licenses.
